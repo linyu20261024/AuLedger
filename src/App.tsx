@@ -64,6 +64,21 @@ const NAV_ITEMS: Array<{ id: NavTab; label: string; icon: typeof CandlestickChar
   { id: 'backup', label: '自动备份与设置', icon: DatabaseBackup },
 ];
 
+function migrateLedger(state: LedgerState): LedgerState {
+  if ((state.version ?? 1) < 3) {
+    return {
+      ...state,
+      version: 3,
+      accounts: state.accounts.map((acc) =>
+        acc.id === 'acc-default-accum' && acc.buybackSpreadPerGram === 0.5
+          ? { ...acc, buybackSpreadPerGram: 5.0 }
+          : acc
+      ),
+    };
+  }
+  return state;
+}
+
 export default function App() {
   const [activeTab, setActiveTab] = useState<NavTab>('overview');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -74,7 +89,11 @@ export default function App() {
       if (cached) {
         const parsed = JSON.parse(cached) as LedgerState;
         if (Array.isArray(parsed.accounts) && Array.isArray(parsed.transactions)) {
-          return parsed;
+          const migrated = migrateLedger(parsed);
+          if (migrated !== parsed) {
+            localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(migrated));
+          }
+          return migrated;
         }
       }
     } catch {
@@ -156,9 +175,10 @@ export default function App() {
         if (res.ok && ct.includes('application/json')) {
           const data = (await res.json()) as { exists: boolean; ledger: LedgerState | null };
           if (!cancelled && data.exists && data.ledger) {
-            setLedger(data.ledger);
+            const migrated = migrateLedger(data.ledger);
+            setLedger(migrated);
             try {
-              localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(data.ledger));
+              localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(migrated));
             } catch {
               // ignore
             }

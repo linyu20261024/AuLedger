@@ -1,7 +1,7 @@
 import type { LedgerState } from '../types/gold';
 
 export const DEFAULT_LEDGER_STATE: LedgerState = {
-  version: 2,
+  version: 3,
   updatedAt: new Date().toISOString(),
   settings: {
     colorConvention: 'cn',
