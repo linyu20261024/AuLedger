@@ -26,7 +26,7 @@ export function AccountModal({
   const [institution, setInstitution] = useState('');
   const [type, setType] = useState<AccountType>('accumulation');
   const [purity, setPurity] = useState('0.9999');
-  const [buybackSpreadPerGram, setBuybackSpreadPerGram] = useState('0.5');
+  const [buybackSpreadPerGram, setBuybackSpreadPerGram] = useState('5.0');
   const [defaultFeeRate, setDefaultFeeRate] = useState('0.35');
   const [accountingMethod, setAccountingMethod] = useState<AccountingMethod>('weighted_avg');
   const [notes, setNotes] = useState('');
@@ -48,7 +48,7 @@ export function AccountModal({
       setInstitution('');
       setType('accumulation');
       setPurity('0.9999');
-      setBuybackSpreadPerGram('0.5');
+      setBuybackSpreadPerGram('5.0');
       setDefaultFeeRate('0.35');
       setAccountingMethod('weighted_avg');
       setNotes('');
@@ -66,7 +66,7 @@ export function AccountModal({
         setDefaultFeeRate('0');
         setAccountingMethod('fifo');
       } else if (nextType === 'accumulation') {
-        setBuybackSpreadPerGram('0.5');
+        setBuybackSpreadPerGram('5.0');
         setDefaultFeeRate('0.35');
         setAccountingMethod('weighted_avg');
       } else {

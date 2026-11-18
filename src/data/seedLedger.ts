@@ -18,7 +18,7 @@ export const DEFAULT_LEDGER_STATE: LedgerState = {
       institution: '银行积存金',
       type: 'accumulation',
       purity: 0.9999,
-      buybackSpreadPerGram: 0.5,
+      buybackSpreadPerGram: 5.0,
       defaultFeeRate: 0.35,
       accountingMethod: 'weighted_avg',
       notes: '支持按克或按金额定投积存',
