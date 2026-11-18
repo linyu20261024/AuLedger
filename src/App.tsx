@@ -54,7 +54,7 @@ import {
 
 type NavTab = 'overview' | 'accounts' | 'backtest' | 'analytics' | 'backup';
 
-const LOCAL_STORAGE_KEY = 'auledger_state_v1';
+const LOCAL_STORAGE_KEY = 'auledger_state_v2';
 
 const NAV_ITEMS: Array<{ id: NavTab; label: string; icon: typeof CandlestickChart }> = [
   { id: 'overview', label: '行情与总览', icon: CandlestickChart },
@@ -93,16 +93,16 @@ export default function App() {
   const [historyLoading, setHistoryLoading] = useState(true);
 
   const [spot, setSpot] = useState<SpotQuote>({
-    cnyPerGram: 635.0,
-    usdPerOz: 2720.0,
-    usdCnyRate: 7.23,
-    prevCloseCny: 632.0,
-    changeCny: 3.0,
-    changePct: 0.47,
-    high24hCny: 637.5,
-    low24hCny: 631.0,
+    cnyPerGram: 0,
+    usdPerOz: 0,
+    usdCnyRate: 0,
+    prevCloseCny: 0,
+    changeCny: 0,
+    changePct: 0,
+    high24hCny: 0,
+    low24hCny: 0,
     updatedAt: new Date().toISOString(),
-    source: '初始化加载中',
+    source: '正在同步实时行情...',
     isLive: false,
   });
   const [spotRefreshing, setSpotRefreshing] = useState(false);
@@ -578,20 +578,24 @@ export default function App() {
                   </div>
                   <div className="mt-2 flex items-baseline gap-2.5">
                     <span className="text-2xl font-bold font-mono-tabular text-slate-900 dark:text-slate-100">
-                      {formatCny(spot.cnyPerGram)}
+                      {spot.cnyPerGram > 0 ? formatCny(spot.cnyPerGram) : '同步中...'}
                     </span>
-                    <span className="text-xs text-slate-400">/g</span>
-                    <span
-                      className={`text-xs font-semibold font-mono-tabular ${getTrendTextClass(
-                        spot.changeCny,
-                        colorConv
-                      )}`}
-                    >
-                      {formatSignedCny(spot.changeCny)} ({formatSignedPct(spot.changePct)})
-                    </span>
+                    {spot.cnyPerGram > 0 && <span className="text-xs text-slate-400">/g</span>}
+                    {spot.cnyPerGram > 0 && (
+                      <span
+                        className={`text-xs font-semibold font-mono-tabular ${getTrendTextClass(
+                          spot.changeCny,
+                          colorConv
+                        )}`}
+                      >
+                        {formatSignedCny(spot.changeCny)} ({formatSignedPct(spot.changePct)})
+                      </span>
+                    )}
                   </div>
                   <div className="mt-1.5 text-[11px] font-mono-tabular text-slate-500 dark:text-slate-400">
-                    伦敦金 {formatUsd(spot.usdPerOz)}/oz · 汇率 {spot.usdCnyRate.toFixed(4)}
+                    {spot.usdPerOz > 0
+                      ? `伦敦金 ${formatUsd(spot.usdPerOz)}/oz · 汇率 ${spot.usdCnyRate.toFixed(4)}`
+                      : spot.source}
                   </div>
                 </div>
 

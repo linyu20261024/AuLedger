@@ -245,58 +245,61 @@ async function getLiveSpotQuote(sgePremiumCny: number): Promise<SpotQuote> {
     return quote;
   }
 
-  // Secondary fallback: goldprice.org
+  // Secondary real fallback: Gold-API + Binance PAXG + Frankfurter FX
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 4000);
-    const gpRes = await fetch('https://data-asg.goldprice.org/dbXRates/USD,CNY', {
-      signal: controller.signal,
-      headers: { 'User-Agent': 'Mozilla/5.0' },
-    });
+    const timeout = setTimeout(() => controller.abort(), 5000);
+    const [fxRes2, goldApiRes, paxgRes] = await Promise.all([
+      fetch('https://api.frankfurter.app/latest?from=USD&to=CNY', { signal: controller.signal }).catch(() => null),
+      fetch('https://api.gold-api.com/price/XAU', { signal: controller.signal }).catch(() => null),
+      fetch('https://data-api.binance.vision/api/v3/ticker/24hr?symbol=PAXGUSDT', { signal: controller.signal }).catch(() => null),
+    ]);
     clearTimeout(timeout);
-    if (gpRes.ok) {
-      const gp = (await gpRes.json()) as {
-        items?: Array<{ curr: string; xauPrice: number; xauClose: number; chgXau: number; pcXau: number }>;
-      };
-      const usdItem = gp.items?.find((i) => i.curr === 'USD');
-      const cnyItem = gp.items?.find((i) => i.curr === 'CNY');
-      if (usdItem && cnyItem) {
-        const usdPerOz = usdItem.xauPrice;
-        const cnyPerOz = cnyItem.xauPrice;
-        const usdCnyRate = Number((cnyPerOz / usdPerOz).toFixed(4));
-        const cnyPerGram = Number((cnyPerOz / GRAMS_PER_TROY_OUNCE + sgePremiumCny).toFixed(2));
-        const prevCloseCny = Number((cnyItem.xauClose / GRAMS_PER_TROY_OUNCE + sgePremiumCny).toFixed(2));
-        const changeCny = Number((cnyPerGram - prevCloseCny).toFixed(2));
-        const changePct = prevCloseCny > 0 ? Number(((changeCny / prevCloseCny) * 100).toFixed(2)) : 0;
 
-        const quote: SpotQuote = {
-          cnyPerGram,
-          usdPerOz: Number(usdPerOz.toFixed(2)),
-          usdCnyRate,
-          prevCloseCny,
-          changeCny,
-          changePct,
-          high24hCny: Number((cnyPerGram + Math.abs(changeCny) * 0.4).toFixed(2)),
-          low24hCny: Number((cnyPerGram - Math.abs(changeCny) * 0.4).toFixed(2)),
-          updatedAt: new Date().toISOString(),
-          source: 'GoldPrice Spot Feed (XAU/CNY)',
-          isLive: true,
-        };
-        spotCache.set(sgePremiumCny, { expiresAt: Date.now() + 20_000, data: quote });
-        return quote;
-      }
+    const fxJson = fxRes2?.ok ? ((await fxRes2.json()) as { rates?: { CNY?: number } }) : null;
+    const goldJson = goldApiRes?.ok ? ((await goldApiRes.json()) as { price?: number; updatedAt?: string }) : null;
+    const paxgJson = paxgRes?.ok
+      ? ((await paxgRes.json()) as { lastPrice?: string; prevClosePrice?: string; highPrice?: string; lowPrice?: string })
+      : null;
+
+    const usdCnyRate = fxJson?.rates?.CNY ?? 6.67;
+    const usdPerOz = goldJson?.price ?? (paxgJson?.lastPrice ? Number(paxgJson.lastPrice) : 0);
+    if (usdPerOz > 500) {
+      const factor = usdCnyRate / GRAMS_PER_TROY_OUNCE;
+      const prevUsd = paxgJson?.prevClosePrice ? Number(paxgJson.prevClosePrice) : usdPerOz;
+      const highUsd = paxgJson?.highPrice ? Number(paxgJson.highPrice) : usdPerOz;
+      const lowUsd = paxgJson?.lowPrice ? Number(paxgJson.lowPrice) : usdPerOz;
+      const cnyPerGram = Number((usdPerOz * factor + sgePremiumCny).toFixed(2));
+      const prevCloseCny = Number((prevUsd * factor + sgePremiumCny).toFixed(2));
+      const changeCny = Number((cnyPerGram - prevCloseCny).toFixed(2));
+      const changePct = prevCloseCny > 0 ? Number(((changeCny / prevCloseCny) * 100).toFixed(2)) : 0;
+
+      const quote: SpotQuote = {
+        cnyPerGram,
+        usdPerOz: Number(usdPerOz.toFixed(2)),
+        usdCnyRate: Number(usdCnyRate.toFixed(4)),
+        prevCloseCny,
+        changeCny,
+        changePct,
+        high24hCny: Number((highUsd * factor + sgePremiumCny).toFixed(2)),
+        low24hCny: Number((lowUsd * factor + sgePremiumCny).toFixed(2)),
+        updatedAt: goldJson?.updatedAt ?? new Date().toISOString(),
+        source: 'Gold-API / Binance PAXG (实时现货 · Frankfurter汇率)',
+        isLive: true,
+      };
+      spotCache.set(sgePremiumCny, { expiresAt: Date.now() + 20_000, data: quote });
+      return quote;
     }
   } catch {
-    // Fall through to deterministic benchmark
+    // Fall through
   }
 
-  // Local benchmark fallback with gentle realistic intraday micro-tick
+  // Last-resort offline fallback
   const fallbackBars = generateFallbackHistory('1D', sgePremiumCny);
   const last = fallbackBars[fallbackBars.length - 1];
   const first = fallbackBars[0];
-  const jitter = Number((Math.sin(Date.now() / 15000) * 0.35).toFixed(2));
-  const cnyPerGram = Number((last.close + jitter).toFixed(2));
-  const usdPerOz = Number((last.closeUsd + jitter * 4.2).toFixed(2));
+  const cnyPerGram = last.close;
+  const usdPerOz = last.closeUsd;
   const prevCloseCny = first.close;
   const changeCny = Number((cnyPerGram - prevCloseCny).toFixed(2));
   const changePct = Number(((changeCny / prevCloseCny) * 100).toFixed(2));
@@ -311,7 +314,7 @@ async function getLiveSpotQuote(sgePremiumCny: number): Promise<SpotQuote> {
     high24hCny: Math.max(...fallbackBars.map((b) => b.high)),
     low24hCny: Math.min(...fallbackBars.map((b) => b.low)),
     updatedAt: new Date().toISOString(),
-    source: '本地行情基准引擎 (离线模式)',
+    source: '本地离线行情基准',
     isLive: false,
   };
   spotCache.set(sgePremiumCny, { expiresAt: Date.now() + 10_000, data: quote });
@@ -330,6 +333,7 @@ async function getGoldHistory(range: string, sgePremiumCny: number): Promise<{ b
     '1W': { yRange: '5d', interval: '1h', intraday: true },
     '1M': { yRange: '1mo', interval: '1d', intraday: false },
     '3M': { yRange: '3mo', interval: '1d', intraday: false },
+    '6M': { yRange: '6mo', interval: '1d', intraday: false },
     '1Y': { yRange: '1y', interval: '1d', intraday: false },
     '3Y': { yRange: '3y', interval: '1d', intraday: false },
     '5Y': { yRange: '5y', interval: '1d', intraday: false },
@@ -345,21 +349,23 @@ async function getGoldHistory(range: string, sgePremiumCny: number): Promise<{ b
     const timestamps = goldRes.timestamp;
     const q = goldRes.indicators.quote[0];
 
-    // Build FX lookup by date or nearest timestamp
     const fxByDate = new Map<string, number>();
-    let latestFx = fxRes?.meta?.regularMarketPrice ?? 7.23;
+    let latestFx = fxRes?.meta?.regularMarketPrice ?? 6.67;
     if (fxRes?.timestamp && fxRes.indicators?.quote?.[0]?.close) {
       const fxTs = fxRes.timestamp;
       const fxClose = fxRes.indicators.quote[0].close;
       for (let i = 0; i < fxTs.length; i++) {
         const c = fxClose[i];
-        if (typeof c === 'number' && Number.isFinite(c) && c > 5) {
+        if (typeof c === 'number' && Number.isFinite(c) && c > 4) {
           const dStr = new Date(fxTs[i] * 1000).toISOString().slice(0, 10);
           fxByDate.set(dStr, c);
           latestFx = c;
         }
       }
     }
+
+    const sortedFxDates = Array.from(fxByDate.keys()).sort();
+    let lastKnownFx = sortedFxDates.length > 0 ? fxByDate.get(sortedFxDates[0])! : latestFx;
 
     const bars: PriceBar[] = [];
     const seenKeys = new Set<string | number>();
@@ -387,7 +393,10 @@ async function getGoldHistory(range: string, sgePremiumCny: number): Promise<{ b
       if (seenKeys.has(timeKey)) continue;
       seenKeys.add(timeKey);
 
-      const usdCny = fxByDate.get(dateStr) ?? latestFx;
+      if (fxByDate.has(dateStr)) {
+        lastKnownFx = fxByDate.get(dateStr)!;
+      }
+      const usdCny = cfg.intraday ? latestFx : lastKnownFx;
       const factor = usdCny / GRAMS_PER_TROY_OUNCE;
 
       bars.push({

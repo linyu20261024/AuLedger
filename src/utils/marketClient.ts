@@ -6,109 +6,33 @@ import type {
 } from '../types/gold';
 
 const GRAMS_PER_TROY_OUNCE = 31.1034768;
-const LOCAL_BACKUPS_KEY = 'auledger_backups_v1';
+export const LOCAL_BACKUPS_KEY = 'auledger_backups_v2';
 
 interface LocalBackupEntry {
   meta: BackupSnapshotMeta;
   ledger: LedgerState;
 }
 
-function generateClientFallbackHistory(range: string, sgePremiumCny: number): PriceBar[] {
-  const now = new Date();
-  const daysMap: Record<string, number> = {
-    '1D': 1,
-    '1W': 7,
-    '1M': 30,
-    '3M': 90,
-    '6M': 180,
-    '1Y': 365,
-    '3Y': 1095,
-    '5Y': 1825,
-  };
-  const totalDays = daysMap[range] ?? 365;
+const spotClientCache = new Map<number, { expiresAt: number; data: SpotQuote }>();
+const historyClientCache = new Map<
+  string,
+  { expiresAt: number; data: { bars: PriceBar[]; source: string; isLive: boolean } }
+>();
 
-  if (range === '1D' || range === '1W') {
-    const stepSeconds = range === '1D' ? 900 : 3600;
-    const totalPoints = range === '1D' ? 96 : 168;
-    const endTs = Math.floor(now.getTime() / stepSeconds / 1000) * stepSeconds;
-    const bars: PriceBar[] = [];
-    let usdPrice = 3795.0;
-    const usdCny = 6.67;
-
-    for (let i = totalPoints; i >= 0; i--) {
-      const ts = endTs - i * stepSeconds;
-      const seed = Math.sin(ts * 0.00017) * 0.55 + Math.cos(ts * 0.00043) * 0.35;
-      const openUsd = usdPrice;
-      const delta = seed * 4.5 + Math.sin(i * 0.31) * 2.1;
-      const closeUsd = Math.max(3200, openUsd + delta);
-      const highUsd = Math.max(openUsd, closeUsd) + Math.abs(Math.sin(i * 1.7)) * 3.1;
-      const lowUsd = Math.min(openUsd, closeUsd) - Math.abs(Math.cos(i * 1.3)) * 3.1;
-      usdPrice = closeUsd;
-
-      const factor = usdCny / GRAMS_PER_TROY_OUNCE;
-      bars.push({
-        time: new Date(ts * 1000).toISOString().slice(0, 16).replace('T', ' '),
-        timestamp: ts,
-        open: Number((openUsd * factor + sgePremiumCny).toFixed(2)),
-        high: Number((highUsd * factor + sgePremiumCny).toFixed(2)),
-        low: Number((lowUsd * factor + sgePremiumCny).toFixed(2)),
-        close: Number((closeUsd * factor + sgePremiumCny).toFixed(2)),
-        openUsd: Number(openUsd.toFixed(2)),
-        highUsd: Number(highUsd.toFixed(2)),
-        lowUsd: Number(lowUsd.toFixed(2)),
-        closeUsd: Number(closeUsd.toFixed(2)),
-        usdCny,
-      });
-    }
-    return bars;
+async function fetchJsonWithTimeout<T>(url: string, timeoutMs = 6000, init?: RequestInit): Promise<T | null> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { ...init, signal: controller.signal });
+    if (!res.ok) return null;
+    const ct = res.headers.get('content-type') || '';
+    if (!ct.includes('application/json') && !ct.includes('text/plain')) return null;
+    return (await res.json()) as T;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
   }
-
-  const bars: PriceBar[] = [];
-  const startDate = new Date(now.getTime() - totalDays * 86400 * 1000);
-  const startYearRatio = Math.max(0, 1 - totalDays / 1825);
-  let usdPrice = 1850 + startYearRatio * 1950;
-  const seenDates = new Set<string>();
-
-  for (let d = 0; d <= totalDays; d++) {
-    const dt = new Date(startDate.getTime() + d * 86400 * 1000);
-    const dayOfWeek = dt.getUTCDay();
-    if (dayOfWeek === 0 || dayOfWeek === 6) continue;
-
-    const dateStr = dt.toISOString().slice(0, 10);
-    if (seenDates.has(dateStr)) continue;
-    seenDates.add(dateStr);
-
-    const progress = d / Math.max(1, totalDays);
-    const secularTrend = (3820 - (1850 + startYearRatio * 1950)) / Math.max(1, totalDays * 0.71);
-    const macroWave =
-      Math.sin(d * 0.045) * 28 + Math.cos(d * 0.13) * 14 + Math.sin(d * 0.41) * 7;
-
-    const openUsd = usdPrice;
-    const target = 1850 + startYearRatio * 1950 + secularTrend * d + macroWave + progress * 35;
-    const closeUsd = Math.max(1750, openUsd * 0.65 + target * 0.35 + Math.sin(d * 1.13) * 16);
-    const highUsd = Math.max(openUsd, closeUsd) + 6 + Math.abs(Math.sin(d * 2.1)) * 18;
-    const lowUsd = Math.min(openUsd, closeUsd) - 6 - Math.abs(Math.cos(d * 1.7)) * 16;
-    usdPrice = closeUsd;
-
-    const usdCny = Number((7.15 - progress * 0.45 + Math.sin(d * 0.015) * 0.08).toFixed(4));
-    const factor = usdCny / GRAMS_PER_TROY_OUNCE;
-
-    bars.push({
-      time: dateStr,
-      timestamp: Math.floor(new Date(`${dateStr}T00:00:00Z`).getTime() / 1000),
-      open: Number((openUsd * factor + sgePremiumCny).toFixed(2)),
-      high: Number((highUsd * factor + sgePremiumCny).toFixed(2)),
-      low: Number((lowUsd * factor + sgePremiumCny).toFixed(2)),
-      close: Number((closeUsd * factor + sgePremiumCny).toFixed(2)),
-      openUsd: Number(openUsd.toFixed(2)),
-      highUsd: Number(highUsd.toFixed(2)),
-      lowUsd: Number(lowUsd.toFixed(2)),
-      closeUsd: Number(closeUsd.toFixed(2)),
-      usdCny,
-    });
-  }
-
-  return bars;
 }
 
 async function fetchJsonIfApiAvailable<T>(url: string, init?: RequestInit): Promise<T | null> {
@@ -123,66 +47,281 @@ async function fetchJsonIfApiAvailable<T>(url: string, init?: RequestInit): Prom
   }
 }
 
+async function fetchFxRatesRange(startDate: string, endDate: string): Promise<{
+  byDate: Map<string, number>;
+  latestRate: number;
+}> {
+  const byDate = new Map<string, number>();
+  let latestRate = 6.67;
+
+  // Primary: Frankfurter ECB historical FX API (CORS *)
+  const frankfurter = await fetchJsonWithTimeout<{
+    rates?: Record<string, { CNY?: number }>;
+  }>(`https://api.frankfurter.app/${startDate}..${endDate}?from=USD&to=CNY`, 6000);
+
+  if (frankfurter?.rates) {
+    const dates = Object.keys(frankfurter.rates).sort();
+    for (const d of dates) {
+      const rate = frankfurter.rates[d]?.CNY;
+      if (typeof rate === 'number' && Number.isFinite(rate) && rate > 4) {
+        byDate.set(d, rate);
+        latestRate = rate;
+      }
+    }
+    if (byDate.size > 0) {
+      return { byDate, latestRate };
+    }
+  }
+
+  // Fallback: latest rate
+  const latestEr = await fetchJsonWithTimeout<{ rates?: { CNY?: number } }>(
+    'https://open.er-api.com/v6/latest/USD',
+    5000
+  );
+  if (typeof latestEr?.rates?.CNY === 'number') {
+    latestRate = latestEr.rates.CNY;
+  }
+  return { byDate, latestRate };
+}
+
+async function fetchLatestUsdCny(): Promise<number> {
+  const f = await fetchJsonWithTimeout<{ rates?: { CNY?: number } }>(
+    'https://api.frankfurter.app/latest?from=USD&to=CNY',
+    4500
+  );
+  if (typeof f?.rates?.CNY === 'number' && f.rates.CNY > 4) {
+    return f.rates.CNY;
+  }
+  const er = await fetchJsonWithTimeout<{ rates?: { CNY?: number } }>(
+    'https://open.er-api.com/v6/latest/USD',
+    4500
+  );
+  if (typeof er?.rates?.CNY === 'number' && er.rates.CNY > 4) {
+    return er.rates.CNY;
+  }
+  return 6.67;
+}
+
+type BinanceKline = [
+  number, // openTime ms
+  string, // open
+  string, // high
+  string, // low
+  string, // close
+  string, // volume
+  number, // closeTime ms
+];
+
+async function fetchBinanceKlines(
+  interval: string,
+  limit: number,
+  endTime?: number
+): Promise<BinanceKline[] | null> {
+  const qs = `symbol=PAXGUSDT&interval=${interval}&limit=${limit}${
+    endTime ? `&endTime=${endTime}` : ''
+  }`;
+  const hosts = ['https://data-api.binance.vision', 'https://api.binance.com'];
+  for (const host of hosts) {
+    const data = await fetchJsonWithTimeout<BinanceKline[]>(
+      `${host}/api/v3/klines?${qs}`,
+      6000
+    );
+    if (Array.isArray(data) && data.length > 0) {
+      return data;
+    }
+  }
+  return null;
+}
+
+async function fetchRealBrowserHistory(
+  range: string,
+  sgePremiumCny: number
+): Promise<{ bars: PriceBar[]; source: string; isLive: boolean } | null> {
+  const rangeCfg: Record<string, { interval: string; totalBars: number; intraday: boolean }> = {
+    '1D': { interval: '15m', totalBars: 96, intraday: true },
+    '1W': { interval: '1h', totalBars: 168, intraday: true },
+    '1M': { interval: '1d', totalBars: 31, intraday: false },
+    '3M': { interval: '1d', totalBars: 92, intraday: false },
+    '6M': { interval: '1d', totalBars: 183, intraday: false },
+    '1Y': { interval: '1d', totalBars: 365, intraday: false },
+    '3Y': { interval: '1d', totalBars: 1095, intraday: false },
+    '5Y': { interval: '1d', totalBars: 1825, intraday: false },
+  };
+  const cfg = rangeCfg[range] ?? rangeCfg['1Y'];
+
+  let rawKlines: BinanceKline[] = [];
+  if (cfg.totalBars <= 1000) {
+    const batch = await fetchBinanceKlines(cfg.interval, cfg.totalBars);
+    if (!batch) return null;
+    rawKlines = batch;
+  } else {
+    // Paginate backwards in 2 chunks for 3Y / 5Y real daily candles
+    const latestBatch = await fetchBinanceKlines(cfg.interval, 1000);
+    if (!latestBatch || latestBatch.length === 0) return null;
+    const remaining = cfg.totalBars - latestBatch.length;
+    const earliestOpenMs = latestBatch[0][0];
+    const olderBatch =
+      remaining > 0
+        ? await fetchBinanceKlines(cfg.interval, Math.min(1000, remaining), earliestOpenMs - 1)
+        : null;
+    rawKlines = [...(olderBatch ?? []), ...latestBatch];
+  }
+
+  if (rawKlines.length === 0) return null;
+
+  const firstDate = new Date(rawKlines[0][0]).toISOString().slice(0, 10);
+  const lastDate = new Date(rawKlines[rawKlines.length - 1][0]).toISOString().slice(0, 10);
+  const fx = cfg.intraday
+    ? { byDate: new Map<string, number>(), latestRate: await fetchLatestUsdCny() }
+    : await fetchFxRatesRange(firstDate, lastDate);
+
+  // Build sorted FX lookup so weekend/holiday candles use nearest prior FX rate
+  const sortedFxDates = Array.from(fx.byDate.keys()).sort();
+  let lastKnownFx = sortedFxDates.length > 0 ? fx.byDate.get(sortedFxDates[0])! : fx.latestRate;
+
+  const bars: PriceBar[] = [];
+  const seenKeys = new Set<string | number>();
+
+  for (const k of rawKlines) {
+    const ts = Math.floor(k[0] / 1000);
+    const oUsd = Number(k[1]);
+    const hUsd = Number(k[2]);
+    const lUsd = Number(k[3]);
+    const cUsd = Number(k[4]);
+    if (!Number.isFinite(oUsd) || !Number.isFinite(cUsd)) continue;
+
+    const dt = new Date(k[0]);
+    const dateStr = dt.toISOString().slice(0, 10);
+    const timeKey = cfg.intraday ? ts : dateStr;
+    if (seenKeys.has(timeKey)) continue;
+    seenKeys.add(timeKey);
+
+    if (fx.byDate.has(dateStr)) {
+      lastKnownFx = fx.byDate.get(dateStr)!;
+    }
+    const usdCny = cfg.intraday ? fx.latestRate : lastKnownFx;
+    const factor = usdCny / GRAMS_PER_TROY_OUNCE;
+
+    bars.push({
+      time: cfg.intraday ? dt.toISOString().slice(0, 16).replace('T', ' ') : dateStr,
+      timestamp: ts,
+      open: Number((oUsd * factor + sgePremiumCny).toFixed(2)),
+      high: Number((hUsd * factor + sgePremiumCny).toFixed(2)),
+      low: Number((lUsd * factor + sgePremiumCny).toFixed(2)),
+      close: Number((cUsd * factor + sgePremiumCny).toFixed(2)),
+      openUsd: Number(oUsd.toFixed(2)),
+      highUsd: Number(hUsd.toFixed(2)),
+      lowUsd: Number(lUsd.toFixed(2)),
+      closeUsd: Number(cUsd.toFixed(2)),
+      usdCny: Number(usdCny.toFixed(4)),
+    });
+  }
+
+  bars.sort((a, b) => a.timestamp - b.timestamp);
+  return {
+    bars,
+    source: 'Binance PAXG (伦敦现货黄金1:1映射) · Frankfurter 汇率',
+    isLive: true,
+  };
+}
+
 export async function fetchSpotClient(sgePremiumCny: number): Promise<SpotQuote> {
+  const cached = spotClientCache.get(sgePremiumCny);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.data;
+  }
+
+  // 1. Try local Express backend first
   const apiSpot = await fetchJsonIfApiAvailable<SpotQuote>(
     `/api/gold/spot?premium=${encodeURIComponent(sgePremiumCny)}`
   );
   if (apiSpot && typeof apiSpot.cnyPerGram === 'number') {
+    spotClientCache.set(sgePremiumCny, { expiresAt: Date.now() + 15_000, data: apiSpot });
     return apiSpot;
   }
 
-  // Direct browser-side public feed fallback for static hosting (e.g., GitHub Pages)
-  try {
-    const res = await fetch('https://data-asg.goldprice.org/dbXRates/USD,CNY');
-    if (res.ok) {
-      const gp = (await res.json()) as {
-        items?: Array<{ curr: string; xauPrice: number; xauClose: number }>;
-      };
-      const usdItem = gp.items?.find((i) => i.curr === 'USD');
-      const cnyItem = gp.items?.find((i) => i.curr === 'CNY');
-      if (usdItem && cnyItem) {
-        const usdPerOz = usdItem.xauPrice;
-        const cnyPerOz = cnyItem.xauPrice;
-        const usdCnyRate = Number((cnyPerOz / usdPerOz).toFixed(4));
-        const cnyPerGram = Number((cnyPerOz / GRAMS_PER_TROY_OUNCE + sgePremiumCny).toFixed(2));
-        const prevCloseCny = Number((cnyItem.xauClose / GRAMS_PER_TROY_OUNCE + sgePremiumCny).toFixed(2));
-        const changeCny = Number((cnyPerGram - prevCloseCny).toFixed(2));
-        const changePct = prevCloseCny > 0 ? Number(((changeCny / prevCloseCny) * 100).toFixed(2)) : 0;
+  // 2. Direct browser CORS-enabled real gold feeds (for GitHub Pages static mode)
+  const [usdCnyRate, goldApi, paxgTicker] = await Promise.all([
+    fetchLatestUsdCny(),
+    fetchJsonWithTimeout<{ price?: number; updatedAt?: string }>(
+      'https://api.gold-api.com/price/XAU',
+      5000
+    ),
+    fetchJsonWithTimeout<{
+      lastPrice?: string;
+      prevClosePrice?: string;
+      highPrice?: string;
+      lowPrice?: string;
+    }>('https://data-api.binance.vision/api/v3/ticker/24hr?symbol=PAXGUSDT', 5000),
+  ]);
 
-        return {
-          cnyPerGram,
-          usdPerOz: Number(usdPerOz.toFixed(2)),
-          usdCnyRate,
-          prevCloseCny,
-          changeCny,
-          changePct,
-          high24hCny: Number((cnyPerGram + Math.abs(changeCny) * 0.4).toFixed(2)),
-          low24hCny: Number((cnyPerGram - Math.abs(changeCny) * 0.4).toFixed(2)),
-          updatedAt: new Date().toISOString(),
-          source: 'GoldPrice Spot Feed (浏览器直连)',
-          isLive: true,
-        };
-      }
-    }
-  } catch {
-    // Fall back to deterministic quote
+  const factor = usdCnyRate / GRAMS_PER_TROY_OUNCE;
+
+  if (typeof goldApi?.price === 'number' && goldApi.price > 500) {
+    const usdPerOz = goldApi.price;
+    const prevUsd = Number(paxgTicker?.prevClosePrice) || usdPerOz;
+    const highUsd = Number(paxgTicker?.highPrice) || usdPerOz;
+    const lowUsd = Number(paxgTicker?.lowPrice) || usdPerOz;
+    const cnyPerGram = Number((usdPerOz * factor + sgePremiumCny).toFixed(2));
+    const prevCloseCny = Number((prevUsd * factor + sgePremiumCny).toFixed(2));
+    const changeCny = Number((cnyPerGram - prevCloseCny).toFixed(2));
+    const changePct = prevCloseCny > 0 ? Number(((changeCny / prevCloseCny) * 100).toFixed(2)) : 0;
+
+    const quote: SpotQuote = {
+      cnyPerGram,
+      usdPerOz: Number(usdPerOz.toFixed(2)),
+      usdCnyRate: Number(usdCnyRate.toFixed(4)),
+      prevCloseCny,
+      changeCny,
+      changePct,
+      high24hCny: Number((highUsd * factor + sgePremiumCny).toFixed(2)),
+      low24hCny: Number((lowUsd * factor + sgePremiumCny).toFixed(2)),
+      updatedAt: goldApi.updatedAt || new Date().toISOString(),
+      source: 'Gold-API 实时现货 (XAU/USD · Frankfurter 汇率)',
+      isLive: true,
+    };
+    spotClientCache.set(sgePremiumCny, { expiresAt: Date.now() + 15_000, data: quote });
+    return quote;
   }
 
-  const bars = generateClientFallbackHistory('1D', sgePremiumCny);
-  const last = bars[bars.length - 1];
-  const first = bars[0];
-  const changeCny = Number((last.close - first.close).toFixed(2));
+  if (paxgTicker?.lastPrice && Number(paxgTicker.lastPrice) > 500) {
+    const usdPerOz = Number(paxgTicker.lastPrice);
+    const prevUsd = Number(paxgTicker.prevClosePrice) || usdPerOz;
+    const highUsd = Number(paxgTicker.highPrice) || usdPerOz;
+    const lowUsd = Number(paxgTicker.lowPrice) || usdPerOz;
+    const cnyPerGram = Number((usdPerOz * factor + sgePremiumCny).toFixed(2));
+    const prevCloseCny = Number((prevUsd * factor + sgePremiumCny).toFixed(2));
+    const changeCny = Number((cnyPerGram - prevCloseCny).toFixed(2));
+    const changePct = prevCloseCny > 0 ? Number(((changeCny / prevCloseCny) * 100).toFixed(2)) : 0;
+
+    const quote: SpotQuote = {
+      cnyPerGram,
+      usdPerOz: Number(usdPerOz.toFixed(2)),
+      usdCnyRate: Number(usdCnyRate.toFixed(4)),
+      prevCloseCny,
+      changeCny,
+      changePct,
+      high24hCny: Number((highUsd * factor + sgePremiumCny).toFixed(2)),
+      low24hCny: Number((lowUsd * factor + sgePremiumCny).toFixed(2)),
+      updatedAt: new Date().toISOString(),
+      source: 'Binance PAXG 现货映射 · Frankfurter 汇率',
+      isLive: true,
+    };
+    spotClientCache.set(sgePremiumCny, { expiresAt: Date.now() + 15_000, data: quote });
+    return quote;
+  }
+
   return {
-    cnyPerGram: last.close,
-    usdPerOz: last.closeUsd,
-    usdCnyRate: last.usdCny,
-    prevCloseCny: first.close,
-    changeCny,
-    changePct: Number(((changeCny / first.close) * 100).toFixed(2)),
-    high24hCny: Math.max(...bars.map((b) => b.high)),
-    low24hCny: Math.min(...bars.map((b) => b.low)),
+    cnyPerGram: 0,
+    usdPerOz: 0,
+    usdCnyRate,
+    prevCloseCny: 0,
+    changeCny: 0,
+    changePct: 0,
+    high24hCny: 0,
+    low24hCny: 0,
     updatedAt: new Date().toISOString(),
-    source: '纯前端基准引擎 (静态托管模式)',
+    source: '无法连接实时行情接口，请检查网络后重试',
     isLive: false,
   };
 }
@@ -191,23 +330,54 @@ export async function fetchHistoryClient(
   range: string,
   sgePremiumCny: number
 ): Promise<{ bars: PriceBar[]; source: string; isLive: boolean }> {
+  const cacheKey = `${range}_${sgePremiumCny}`;
+  const cached = historyClientCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.data;
+  }
+
+  // 1. Try local Express backend (Yahoo Finance GC=F + CNY=X)
   const apiRes = await fetchJsonIfApiAvailable<{
     bars?: PriceBar[];
     source?: string;
     isLive?: boolean;
   }>(`/api/gold/history?range=${encodeURIComponent(range)}&premium=${encodeURIComponent(sgePremiumCny)}`);
 
+  if (apiRes && Array.isArray(apiRes.bars) && apiRes.bars.length > 0 && apiRes.isLive) {
+    const result = {
+      bars: apiRes.bars,
+      source: apiRes.source ?? 'Yahoo Finance (COMEX GC=F · USD/CNY)',
+      isLive: true,
+    };
+    historyClientCache.set(cacheKey, {
+      expiresAt: Date.now() + (range === '1D' || range === '1W' ? 60_000 : 300_000),
+      data: result,
+    });
+    return result;
+  }
+
+  // 2. Direct browser CORS-enabled real historical candles (GitHub Pages mode)
+  const browserReal = await fetchRealBrowserHistory(range, sgePremiumCny);
+  if (browserReal && browserReal.bars.length > 0) {
+    historyClientCache.set(cacheKey, {
+      expiresAt: Date.now() + (range === '1D' || range === '1W' ? 60_000 : 300_000),
+      data: browserReal,
+    });
+    return browserReal;
+  }
+
+  // 3. If backend returned cached bars even with isLive=false, use them rather than empty
   if (apiRes && Array.isArray(apiRes.bars) && apiRes.bars.length > 0) {
     return {
       bars: apiRes.bars,
-      source: apiRes.source ?? '服务端实时行情',
-      isLive: Boolean(apiRes.isLive),
+      source: apiRes.source ?? '离线缓存行情',
+      isLive: false,
     };
   }
 
   return {
-    bars: generateClientFallbackHistory(range, sgePremiumCny),
-    source: '纯前端基准序列 (静态托管模式)',
+    bars: [],
+    source: '未能获取真实历史行情数据，请检查网络或开启本地服务代理',
     isLive: false,
   };
 }
@@ -285,7 +455,6 @@ export async function saveLedgerClient(
     };
   }
 
-  // Static mode fallback: roll localStorage snapshot
   const updatedAt = new Date().toISOString();
   let backupCreated = false;
   if (createAutoBackup && ledger.settings.autoBackupEnabled) {

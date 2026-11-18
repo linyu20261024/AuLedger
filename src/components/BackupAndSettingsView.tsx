@@ -13,6 +13,7 @@ import type {
   LedgerState,
 } from '../types/gold';
 import { formatBytes, formatGrams } from '../utils/formatters';
+import { LOCAL_BACKUPS_KEY } from '../utils/marketClient';
 
 interface BackupAndSettingsViewProps {
   ledger: LedgerState;
@@ -88,7 +89,7 @@ export function BackupAndSettingsView({
     }
 
     try {
-      const raw = localStorage.getItem('auledger_backups_v1');
+      const raw = localStorage.getItem(LOCAL_BACKUPS_KEY);
       if (raw) {
         const entries = JSON.parse(raw) as Array<{ meta: { filename: string }; ledger: LedgerState }>;
         const hit = entries.find((e) => e.meta.filename === filename);
@@ -282,7 +283,7 @@ export function BackupAndSettingsView({
                   onClick={onResetToDemo}
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer"
                 >
-                  恢复示例数据
+                  清空账本并重置
                 </button>
               </div>
             </div>

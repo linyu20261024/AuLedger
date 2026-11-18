@@ -473,7 +473,11 @@ export function GoldPriceChart({
       <div className="relative w-full h-[390px]">
         {loading && bars.length === 0 ? (
           <div className="w-full h-full rounded-lg bg-slate-100 dark:bg-slate-800/40 animate-pulse flex items-center justify-center text-sm text-slate-500">
-            正在同步历史行情序列...
+            正在同步真实历史行情序列...
+          </div>
+        ) : !loading && bars.length === 0 ? (
+          <div className="w-full h-full rounded-lg border border-dashed border-slate-200 dark:border-slate-800 flex items-center justify-center text-xs text-slate-500 dark:text-slate-400 px-4 text-center">
+            未能获取到真实历史行情数据（{sourceLabel}），请检查网络后点击右上角“同步金价”或切换周期重试。
           </div>
         ) : (
           <div ref={containerRef} className="w-full h-full" />
